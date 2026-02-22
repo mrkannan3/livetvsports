@@ -1,0 +1,23 @@
+# Kodi related
+*.zip
+*.pyc
+__pycache__/
+
+# System related
+.DS_Store
+Thumbs.db
+
+# Development related
+.agent/
+.gemini/
+debug_scraper.py
+verify_icons.py
+nav_full.txt
+nav_dump.txt
+map_icons.py
+test_scraper.py
+test_resolver.py
+*.md
+!README.md
+!addons.xml
+!addons.xml.md5

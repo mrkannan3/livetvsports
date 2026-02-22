@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="repository.livetvsports" name="LiveTV Sports Repository" version="1.0.0" provider-name="Ramesh">
+    <extension point="xbmc.addon.repository" name="LiveTV Sports Repository">
+        <dir>
+            <info compressed="false">https://raw.githubusercontent.com/username/livetv-sports-repo/master/addons.xml</info>
+            <checksum>https://raw.githubusercontent.com/username/livetv-sports-repo/master/addons.xml.md5</checksum>
+            <datadir zip="true">https://raw.githubusercontent.com/username/livetv-sports-repo/master/</datadir>
+        </dir>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <summary>Repository for LiveTV Sports Kodi Addon</summary>
+        <description>This repository contains the LiveTV Sports addon for Kodi.</description>
+        <platform>all</platform>
+    </extension>
+</addon>

@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<addon id="plugin.video.livetvsports" name="LiveTV Sports" version="1.0.0" provider-name="LiveTVSX">
+    <requires>
+        <import addon="xbmc.python" version="3.0.0" />
+        <import addon="script.module.requests" version="2.22.0" />
+    </requires>
+    <extension point="xbmc.python.pluginsource" library="main.py">
+        <provides>video</provides>
+    </extension>
+    <extension point="xbmc.addon.metadata">
+        <platform>all</platform>
+        <language>en</language>
+        <summary>LiveTV.sx Sports Streams — Live Football, Basketball, Tennis and more</summary>
+        <description>Watch live sport streams from livetv.sx including Football, Basketball, Tennis, Ice Hockey, Handball, Volleyball and many more sports. Browse upcoming events by sport category, search for teams, and watch highlights from the video archive.</description>
+        <assets>
+            <icon>icon.png</icon>
+            <fanart>fanart.jpg</fanart>
+        </assets>
+    </extension>
+</addon>

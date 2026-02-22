@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<settings>
+   <category label="General">
+      <setting type="lsep" label="Connection"/>
+      <setting type="text" label="Base URL" id="base_url" default="https://livetv.sx" />
+      <setting type="lsep" label="Playback"/>
+      <setting type="enum" label="Preferred Stream Quality" id="preferred_quality" default="0" values="Best Available|HD (high bitrate)|SD (lower bitrate)" />
+      <setting type="lsep" label="Display"/>
+      <setting type="bool" label="Show Live Events at Top" id="live_first" default="true" />
+      <setting type="slider" label="Timezone Offset (hours from site time)" id="tz_offset" default="-7" range="-12,1,12" option="int" />
+      <setting type="lsep" label="Developer"/>
+      <setting type="bool" label="Debug Logging" id="debug_logging" default="false" />
+      <setting type="text" id="cdn_domain" visible="false" default="livetv873.me" />
+   </category>
+</settings>
+
