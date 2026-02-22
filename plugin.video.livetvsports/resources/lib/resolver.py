@@ -16,6 +16,8 @@
 #   5. Fall back to the raw iframe URL if no m3u8 is found
 
 import re
+import base64
+import urllib.parse
 import requests
 import urllib3
 from resources.lib.utils import log, USER_AGENT, get_base_url, get_setting
@@ -86,6 +88,18 @@ def _find_m3u8(html):
             if url:
                 log('Found m3u8: ' + url, 'debug')
                 return url
+
+    # specialized check for base64 'mustave' variable (wikisport.club pattern)
+    m = re.search(r"mustave\s*=\s*['\"]([^'\"]+)['\"]", html)
+    if m:
+        try:
+            path = base64.b64decode(m.group(1)).decode('utf-8')
+            if '.m3u8' in path:
+                log('Found mustave base64 path: ' + path, 'debug')
+                return path
+        except Exception as e:
+            log('Base64 decode failed: ' + str(e), 'debug')
+
     return None
 
 
@@ -149,25 +163,40 @@ def resolve_stream(player_url, event_id=None):
         # --- Step 3: Extract m3u8 from the player iframe page ---
         m3u8 = _find_m3u8(iframe_html)
         if m3u8:
-            log('m3u8 found in player iframe: ' + m3u8)
-            return m3u8
+            full_m3u8 = _abs(m3u8, final_url)
+            log('m3u8 found in player iframe: ' + full_m3u8)
+            # Add Referer for Kodi playback
+            return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_url))
+
+        # Specialized: wikisport.club dynamic iframe pattern
+        # Initial page has fid="...", loads wiki.js which writes iframe to stellarthread.com/wiki.php
+        fid_m = re.search(r'fid\s*=\s*["\']([^"\']+)["\']', iframe_html)
+        if fid_m and 'stellarthread.com' in iframe_html:
+            wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid_m.group(1)
+            log('Constructed wikisport helper URL: ' + wiki_url)
+            final_wiki_url, wiki_html = _get(wiki_url, referer=iframe_url)
+            m3u8 = _find_m3u8(wiki_html)
+            if m3u8:
+                full_m3u8 = _abs(m3u8, final_wiki_url)
+                log('m3u8 found via wikisport helper: ' + full_m3u8)
+                return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_wiki_url))
 
         # --- Step 4: One more level — nested iframes ---
         nested = _find_player_iframes(iframe_html, final_url)
         for nested_url in nested:
             log('Following nested iframe: ' + nested_url)
-            _, nested_html = _get(nested_url, referer=final_url)
+            final_nested_url, nested_html = _get(nested_url, referer=final_url)
             if not nested_html:
                 continue
             m3u8 = _find_m3u8(nested_html)
             if m3u8:
-                log('m3u8 found in nested iframe: ' + m3u8)
-                return m3u8
+                full_m3u8 = _abs(m3u8, final_nested_url)
+                log('m3u8 found in nested iframe: ' + full_m3u8)
+                return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_nested_url))
 
         # No m3u8 found in this iframe chain — try the iframe URL directly
-        # (some iframe players can be played by Kodi's web renderer)
         if iframe_html:
-            log('Falling back to iframe URL: ' + iframe_url)
+            log('Falling back to iframe URL: ' + str(iframe_url))
             return iframe_url
 
     # --- Last resort: return the CDN webplayer URL ---
