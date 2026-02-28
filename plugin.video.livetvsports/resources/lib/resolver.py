@@ -17,17 +17,35 @@
 
 import re
 import base64
+import json
+import time
 import urllib.parse
 import requests
 import urllib3
+import ssl
+from requests.adapters import HTTPAdapter
 from resources.lib.utils import log, USER_AGENT, get_base_url, get_setting
 
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+class SSLAdapter(HTTPAdapter):
+    """Custom adapter to fix SSLEOFError by forcing modern TLS configuration."""
+    def init_poolmanager(self, *args, **kwargs):
+        context = ssl.create_default_context()
+        # Some servers close connection on EOF violation if certain ciphers are used
+        # We try to be as permissive as possible for the handshake phase
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        kwargs['ssl_context'] = context
+        return super(SSLAdapter, self).init_poolmanager(*args, **kwargs)
+
 SESSION = requests.Session()
+SESSION.mount('https://', SSLAdapter())
 SESSION.headers.update({
     'User-Agent': USER_AGENT,
+    'Accept': '*/*',
     'Accept-Language': 'en-US,en;q=0.9',
+    'Origin': 'https://viewembed.ru',
 })
 
 # Ad/tracker domains to skip when filtering iframes
@@ -62,6 +80,16 @@ def _abs(url, base=''):
         return '{}://{}{}'.format(parsed.scheme, parsed.netloc, url)
     return url
 
+
+def _xor_dec(data, key):
+    """Python implementation of the viewembed XOR decoder."""
+    try:
+        if isinstance(data, str):
+            data = json.loads(data)
+        return "".join(chr(c ^ key) for c in data)
+    except Exception as e:
+        log('XOR decode failed: ' + str(e), 'debug')
+        return ""
 
 def _find_m3u8(html):
     """
@@ -180,6 +208,64 @@ def resolve_stream(player_url, event_id=None):
                 full_m3u8 = _abs(m3u8, final_wiki_url)
                 log('m3u8 found via wikisport helper: ' + full_m3u8)
                 return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_wiki_url))
+
+        # Specialized: viewembed.ru pattern (requires XOR decoding and API call)
+        if 'viewembed.ru' in iframe_url:
+            log('Detected viewembed.ru pattern')
+            # Extract init arrays and keys
+            # Pattern: _dec_hexstring(_init_hexstring, key)
+            # We look for the arrays themselves: _init_[a-f0-8]{8} = [ ... ]
+            # And the call using them.
+            try:
+                # Find channelKey (id) and authToken (token)
+                # Usually: _init_8ba8fc7d = [...] and key 203
+                # authToken: _init_9b9d49c6 and key 215
+                
+                # Fetch arrays
+                arrays = {}
+                for m in re.finditer(r'(_init_[a-f0-9]{8})\s*=\s*(\[[^\]]+\])', iframe_html):
+                    arrays[m.group(1)] = json.loads(m.group(2))
+                
+                # Find the init call or the _dec calls
+                # Example: _dec_e6cc777e(_init_9b9d49c6, 215)
+                # We'll just search for the pattern (_init_..., key)
+                resolved_params = {}
+                for m in re.finditer(r'_dec_[a-f0-9]{8}\((_init_[a-f0-9]{8}),\s*(\d+)\)', iframe_html):
+                    array_name = m.group(1)
+                    key = int(m.group(2))
+                    if array_name in arrays:
+                        decoded = _xor_dec(arrays[array_name], key)
+                        resolved_params[array_name] = decoded
+                
+                # Identify which one is which by looking at common names or order
+                # From subagent: authToken (~215), channelKey (~203)
+                token = ""
+                channel_id = ""
+                for name, val in resolved_params.items():
+                    if len(val) > 40: # Token is long
+                        token = val
+                    elif 5 < len(val) < 20: # ID is short
+                        channel_id = val
+                
+                if channel_id and token:
+                    stream_api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(
+                        channel_id, token, int(time.time())
+                    )
+                    log('Fetching viewembed stream from API: ' + stream_api)
+                    _, api_text = _get(stream_api, referer=iframe_url)
+                    try:
+                        api_data = json.loads(api_text)
+                        # The API response should contain the m3u8 URL
+                        # Try to find any URL ending in .m3u8 in the JSON
+                        m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
+                        if m3u8_m:
+                            res_url = m3u8_m.group(0).replace('\\/', '/')
+                            log('m3u8 found via viewembed API: ' + res_url)
+                            return '{}|Referer={}'.format(res_url, urllib.parse.quote(iframe_url))
+                    except:
+                        pass
+            except Exception as e:
+                log('viewembed extraction failed: ' + str(e), 'warning')
 
         # --- Step 4: One more level — nested iframes ---
         nested = _find_player_iframes(iframe_html, final_url)
