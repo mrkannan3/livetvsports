@@ -43,9 +43,14 @@ SESSION = requests.Session()
 SESSION.mount('https://', SSLAdapter())
 SESSION.headers.update({
     'User-Agent': USER_AGENT,
-    'Accept': '*/*',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
     'Accept-Language': 'en-US,en;q=0.9',
-    'Origin': 'https://viewembed.ru',
+    'Connection': 'keep-alive',
+    'Upgrade-Insecure-Requests': '1',
+    'Sec-Fetch-Dest': 'document',
+    'Sec-Fetch-Mode': 'navigate',
+    'Sec-Fetch-Site': 'none',
+    'Sec-Fetch-User': '?1',
 })
 
 # Ad/tracker domains to skip when filtering iframes
@@ -91,20 +96,21 @@ def _xor_dec(data, key):
         log('XOR decode failed: ' + str(e), 'debug')
         return ""
 
-def _find_m3u8(html):
+def _find_m3u8(html, page_url=''):
     """
-    Search for HLS m3u8 stream URLs in a page.
-    Handles both http:// and protocol-relative // prefixes.
-    Also checks pl.init(...) calls used by the apl390.me player.
+    Search for HLS m3u8 stream URLs in a page using various generic patterns.
     """
+    if not html:
+        return None
+
     patterns = [
-        # pl.init('//host/path/index.m3u8?token')  — the confirmed pattern
+        # pl.init('//host/path/index.m3u8?token')
         r"pl\.init\s*\(\s*['\"]([^'\"]+\.m3u8[^'\"]*)['\"]",
         # Generic http(s) m3u8
         r'["\']?(https?://[^"\'<>\s]+\.m3u8[^"\'<>\s]*)',
         # Protocol-relative // m3u8
         r'["\']?(//[^"\'<>\s]+\.m3u8[^"\'<>\s]*)',
-        # jwplayer / videojs file config
+        # jwplayer / videojs / fluidplayer config
         r'["\']file["\']\s*:\s*["\']([^"\']+\.m3u8[^"\']*)',
         r'src\s*[=:]\s*["\']([^"\']+\.m3u8[^"\']*)',
         r'hls\.loadSource\s*\(\s*["\']([^"\']+)',
@@ -112,21 +118,46 @@ def _find_m3u8(html):
     for pat in patterns:
         m = re.search(pat, html, re.IGNORECASE)
         if m:
-            url = _abs(m.group(1).strip("\"'").split('\\')[0])
+            url = _abs(m.group(1).strip("\"'").split('\\')[0], page_url)
             if url:
                 log('Found m3u8: ' + url, 'debug')
                 return url
 
-    # specialized check for base64 'mustave' variable (wikisport.club pattern)
-    m = re.search(r"mustave\s*=\s*['\"]([^'\"]+)['\"]", html)
-    if m:
+    # Heuristic 1: Look for any base64 encoded strings that might contain .m3u8
+    # (Matches what was 'mustave' for wikisport but now generic)
+    for b64_match in re.finditer(r'["\']([A-Za-z0-9+/=]{16,})["\']', html):
         try:
-            path = base64.b64decode(m.group(1)).decode('utf-8')
-            if '.m3u8' in path:
-                log('Found mustave base64 path: ' + path, 'debug')
-                return path
-        except Exception as e:
-            log('Base64 decode failed: ' + str(e), 'debug')
+            decoded = base64.b64decode(b64_match.group(1)).decode('utf-8', 'ignore')
+            if '.m3u8' in decoded:
+                m3u8_url = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*|/[^"\'\s]+\.m3u8[^"\'\s]*)', decoded)
+                if m3u8_m := m3u8_url:
+                    url = _abs(m3u8_m.group(0), page_url)
+                    log('Found m3u8 in base64 string: ' + url, 'debug')
+                    return url
+        except:
+            continue
+
+    # Heuristic 2: Look for common XOR parameters used in players like viewembed.ru
+    # Search for initialization arrays and associated decoders
+    try:
+        arrays = {}
+        for m in re.finditer(r'(_init_[a-f0-9]{8,}|var\s+\w+)\s*=\s*(\[[0-9,\s]+\])', html):
+            name = m.group(1).split()[-1]
+            arrays[name] = json.loads(m.group(2))
+        
+        # Look for calls to a decoder function with those arrays
+        # Pattern: decoder(array, key)
+        for m in re.finditer(r'(\w+)\s*\(\s*(\w+)\s*,\s*(\d+)\s*\)', html):
+            array_name = m.group(2)
+            key = int(m.group(3))
+            if array_name in arrays:
+                decoded = _xor_dec(arrays[array_name], key)
+                if '.m3u8' in decoded or (len(decoded) > 5 and 'id=' not in decoded):
+                    # We found something decoded. If it's not a URL yet, it might be a token/id.
+                    # This logic is handled in the recursive resolver for specific API calls.
+                    pass
+    except:
+        pass
 
     return None
 
@@ -148,145 +179,86 @@ def _find_player_iframes(html, page_url=''):
     return result
 
 
+def _resolve_recursive(url, referer=None, depth=0):
+    """
+    Recursively search for a playable stream through iframes.
+    """
+    if depth > 3: # Avoid deep recursion
+        return None
+
+    log('Deep resolving (level {}): {}'.format(depth, url))
+    final_url, html = _get(url, referer=referer)
+    if not html:
+        return None
+
+    # Step 1: Check for m3u8 in the current page
+    m3u8 = _find_m3u8(html, final_url)
+    if m3u8:
+        # Wrap with Referer for Kodi
+        return '{}|Referer={}'.format(m3u8, urllib.parse.quote(final_url))
+
+    # Step 2: Check for site-specific dynamic patterns (Helper URLs, APIs)
+    # Wikisport pattern
+    fid_m = re.search(r'fid\s*=\s*["\']([^"\']+)["\']', html)
+    if fid_m and 'stellarthread.com' in html:
+        wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid_m.group(1)
+        return _resolve_recursive(wiki_url, referer=final_url, depth=depth+1)
+
+    # Viewembed API pattern
+    if 'viewembed.ru' in final_url or re.search(r'_dec_[a-f0-9]{8}', html):
+        try:
+            arrays = {}
+            for m in re.finditer(r'(_init_[a-f0-9]{8})\s*=\s*(\[[^\]]+\])', html):
+                arrays[m.group(1)] = json.loads(m.group(2))
+            
+            resolved_params = {}
+            for m in re.finditer(r'_dec_[a-f0-9]{8}\((_init_[a-f0-9]{8}),\s*(\d+)\)', html):
+                decoded = _xor_dec(arrays.get(m.group(1)), int(m.group(2)))
+                if decoded:
+                    resolved_params[m.group(1)] = decoded
+            
+            token = next((v for v in resolved_params.values() if len(v) > 40), "")
+            cid = next((v for v in resolved_params.values() if 5 < len(v) < 20), "")
+            
+            if cid and token:
+                api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
+                _, api_text = _get(api, referer=final_url)
+                m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
+                if m3u8_m:
+                    return '{}|Referer={}'.format(m3u8_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
+        except:
+            pass
+
+    # Step 3: Follow all non-ad iframes
+    iframes = _find_player_iframes(html, final_url)
+    for ifr_url in iframes:
+        # Avoid circular iframes
+        if ifr_url == url:
+            continue
+        res = _resolve_recursive(ifr_url, referer=final_url, depth=depth+1)
+        if res:
+            return res
+
+    return None
+
+
 def resolve_stream(player_url, event_id=None):
     """
     Resolve a CDN webplayer URL to an actual playable m3u8 stream URL.
-
-    Args:
-        player_url: The direct CDN webplayer URL
-                    (e.g. https://cdn.livetv873.me/webplayer2.php?t=alieztv&c=242305...)
-        event_id:   Optional event ID, used for logging only.
-
-    Returns:
-        str — playable m3u8 URL (or best available URL)
-        None — if resolution failed completely
     """
     if not player_url:
         return None
 
-    log('Resolving CDN player: ' + player_url)
+    log('Starting Universal Resolution: ' + player_url)
 
-    # --- Step 1: Fetch the CDN webplayer page ---
-    cdn_url, cdn_html = _get(player_url, referer=get_base_url() + '/enx/')
-    if not cdn_html:
-        log('CDN webplayer page returned empty', 'warning')
-        return player_url  # fall back to returning the CDN URL itself
+    # Initial fetch to get the ball rolling
+    res = _resolve_recursive(player_url, referer=get_base_url() + '/enx/')
+    
+    if res:
+        return res
 
-    # Check for m3u8 directly in CDN page (rare but possible)
-    m3u8 = _find_m3u8(cdn_html)
-    if m3u8:
-        log('m3u8 found directly in CDN webplayer page')
-        return m3u8
-
-    # --- Step 2: Find the player iframe (skip ads) ---
-    iframes = _find_player_iframes(cdn_html, cdn_url)
-    log('Player iframes found: {}'.format(iframes), 'debug')
-
-    for iframe_url in iframes:
-        log('Following player iframe: ' + iframe_url)
-        final_url, iframe_html = _get(iframe_url, referer=cdn_url)
-        if not iframe_html:
-            continue
-
-        # --- Step 3: Extract m3u8 from the player iframe page ---
-        m3u8 = _find_m3u8(iframe_html)
-        if m3u8:
-            full_m3u8 = _abs(m3u8, final_url)
-            log('m3u8 found in player iframe: ' + full_m3u8)
-            # Add Referer for Kodi playback
-            return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_url))
-
-        # Specialized: wikisport.club dynamic iframe pattern
-        # Initial page has fid="...", loads wiki.js which writes iframe to stellarthread.com/wiki.php
-        fid_m = re.search(r'fid\s*=\s*["\']([^"\']+)["\']', iframe_html)
-        if fid_m and 'stellarthread.com' in iframe_html:
-            wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid_m.group(1)
-            log('Constructed wikisport helper URL: ' + wiki_url)
-            final_wiki_url, wiki_html = _get(wiki_url, referer=iframe_url)
-            m3u8 = _find_m3u8(wiki_html)
-            if m3u8:
-                full_m3u8 = _abs(m3u8, final_wiki_url)
-                log('m3u8 found via wikisport helper: ' + full_m3u8)
-                return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_wiki_url))
-
-        # Specialized: viewembed.ru pattern (requires XOR decoding and API call)
-        if 'viewembed.ru' in iframe_url:
-            log('Detected viewembed.ru pattern')
-            # Extract init arrays and keys
-            # Pattern: _dec_hexstring(_init_hexstring, key)
-            # We look for the arrays themselves: _init_[a-f0-8]{8} = [ ... ]
-            # And the call using them.
-            try:
-                # Find channelKey (id) and authToken (token)
-                # Usually: _init_8ba8fc7d = [...] and key 203
-                # authToken: _init_9b9d49c6 and key 215
-                
-                # Fetch arrays
-                arrays = {}
-                for m in re.finditer(r'(_init_[a-f0-9]{8})\s*=\s*(\[[^\]]+\])', iframe_html):
-                    arrays[m.group(1)] = json.loads(m.group(2))
-                
-                # Find the init call or the _dec calls
-                # Example: _dec_e6cc777e(_init_9b9d49c6, 215)
-                # We'll just search for the pattern (_init_..., key)
-                resolved_params = {}
-                for m in re.finditer(r'_dec_[a-f0-9]{8}\((_init_[a-f0-9]{8}),\s*(\d+)\)', iframe_html):
-                    array_name = m.group(1)
-                    key = int(m.group(2))
-                    if array_name in arrays:
-                        decoded = _xor_dec(arrays[array_name], key)
-                        resolved_params[array_name] = decoded
-                
-                # Identify which one is which by looking at common names or order
-                # From subagent: authToken (~215), channelKey (~203)
-                token = ""
-                channel_id = ""
-                for name, val in resolved_params.items():
-                    if len(val) > 40: # Token is long
-                        token = val
-                    elif 5 < len(val) < 20: # ID is short
-                        channel_id = val
-                
-                if channel_id and token:
-                    stream_api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(
-                        channel_id, token, int(time.time())
-                    )
-                    log('Fetching viewembed stream from API: ' + stream_api)
-                    _, api_text = _get(stream_api, referer=iframe_url)
-                    try:
-                        api_data = json.loads(api_text)
-                        # The API response should contain the m3u8 URL
-                        # Try to find any URL ending in .m3u8 in the JSON
-                        m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
-                        if m3u8_m:
-                            res_url = m3u8_m.group(0).replace('\\/', '/')
-                            log('m3u8 found via viewembed API: ' + res_url)
-                            return '{}|Referer={}'.format(res_url, urllib.parse.quote(iframe_url))
-                    except:
-                        pass
-            except Exception as e:
-                log('viewembed extraction failed: ' + str(e), 'warning')
-
-        # --- Step 4: One more level — nested iframes ---
-        nested = _find_player_iframes(iframe_html, final_url)
-        for nested_url in nested:
-            log('Following nested iframe: ' + nested_url)
-            final_nested_url, nested_html = _get(nested_url, referer=final_url)
-            if not nested_html:
-                continue
-            m3u8 = _find_m3u8(nested_html)
-            if m3u8:
-                full_m3u8 = _abs(m3u8, final_nested_url)
-                log('m3u8 found in nested iframe: ' + full_m3u8)
-                return '{}|Referer={}'.format(full_m3u8, urllib.parse.quote(final_nested_url))
-
-        # No m3u8 found in this iframe chain — try the iframe URL directly
-        if iframe_html:
-            log('Falling back to iframe URL: ' + str(iframe_url))
-            return iframe_url
-
-    # --- Last resort: return the CDN webplayer URL ---
-    log('Could not extract m3u8 — returning CDN player URL: ' + player_url, 'warning')
+    # Fallback to the original URL if everything fails (Kodi might handle it)
+    log('Universal resolver failed to find m3u8, falling back to original URL', 'warning')
     return player_url
 
 
