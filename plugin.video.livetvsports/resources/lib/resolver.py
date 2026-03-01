@@ -263,31 +263,36 @@ def _resolve_recursive(url, referer=None, depth=0):
             cid = next((v for v in resolved.values() if 5 < len(v) < 25 and not v.startswith('http')), "")
             
             if cid:
-                # 1. Try server_lookup (Fastest/Newest)
+                # 1. Try old get_stream API FIRST (Usually cleaner/direct m3u8)
+                token = next((v for v in resolved.values() if len(v) > 40), "")
+                if token:
+                    api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
+                    log('Attempting Viewembed get_stream API: ' + api)
+                    _, api_text = _get(api, referer=final_url, timeout=10)
+                    m_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
+                    if m_m:
+                        log('Resolved via get_stream API: ' + m_m.group(0))
+                        return '{}|Referer={}'.format(m_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
+
+                # 2. Try server_lookup (Fallback / PNG Disguise)
                 lookup_m = re.search(r'["\'](https?://[^"\'\s]+/server_lookup[^"\'\s]*)["\']', html)
                 if lookup_m:
                     l_url = lookup_m.group(1).split('?')[0] + '?channel_id=' + cid
                     _, l_text = _get(l_url, referer=final_url, timeout=10)
-                    sk = json.loads(l_text).get('server_key')
-                    if sk:
-                        log('Viewembed Server Key: ' + sk)
-                        # Pick the right template (usually uses backticks or sk variable)
-                        templates = re.findall(r'[`"\'\s](https?://[^`"\'\s]+/proxy/[^`"\'\s]+)[`"\'\s]', html)
-                        for tmpl in templates:
-                            if '${sk}' in tmpl or sk in tmpl:
-                                res_url = tmpl.replace('${sk}', sk).replace('${CHANNEL_KEY}', cid).replace('`', '')
-                                log('Resolved via server_lookup: ' + res_url)
-                                return '{}|Referer={}'.format(res_url, urllib.parse.quote(final_url))
-
-                # 2. Try old get_stream API (Fallback)
-                token = next((v for v in resolved.values() if len(v) > 40), "")
-                if token:
-                    api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
-                    _, api_text = _get(api, referer=final_url, timeout=10)
-                    m_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
-                    if m_m:
-                        log('Resolved via old API: ' + m_m.group(0))
-                        return '{}|Referer={}'.format(m_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
+                    try:
+                        sk = json.loads(l_text).get('server_key')
+                        if sk:
+                            log('Viewembed Server Key: ' + sk)
+                            # Pick the right template
+                            templates = re.findall(r'[`"\'\s](https?://[^`"\'\s]+/proxy/[^`"\'\s]+)[`"\'\s]', html)
+                            for tmpl in templates:
+                                if '${sk}' in tmpl or sk in tmpl:
+                                    res_url = tmpl.replace('${sk}', sk).replace('${CHANNEL_KEY}', cid).replace('`', '')
+                                    # CRITICAL: Force MimeType to avoid Kodi misidentifying .css/.png as images
+                                    res_url += '|MimeType=application/vnd.apple.mpegurl'
+                                    log('Resolved via server_lookup (forced HLS): ' + res_url)
+                                    return '{}|Referer={}'.format(res_url, urllib.parse.quote(final_url))
+                    except: pass
         except Exception as e:
             log('Viewembed error: ' + str(e), 'debug')
 
