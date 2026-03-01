@@ -213,21 +213,50 @@ def _resolve_recursive(url, referer=None, depth=0):
             
             resolved_params = {}
             for m in re.finditer(r'_dec_[a-f0-9]{8}\((_init_[a-f0-9]{8}),\s*(\d+)\)', html):
-                decoded = _xor_dec(arrays.get(m.group(1)), int(m.group(2)))
-                if decoded:
-                    resolved_params[m.group(1)] = decoded
+                array_name = m.group(1)
+                key = int(m.group(2))
+                if array_name in arrays:
+                    decoded = _xor_dec(arrays[array_name], key)
+                    if decoded:
+                        resolved_params[array_name] = decoded
             
             token = next((v for v in resolved_params.values() if len(v) > 40), "")
-            cid = next((v for v in resolved_params.values() if 5 < len(v) < 20), "")
+            cid = next((v for v in resolved_params.values() if 5 < len(v) < 20 and not v.startswith('http')), "")
             
-            if cid and token:
-                api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
-                _, api_text = _get(api, referer=final_url)
-                m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
-                if m3u8_m:
-                    return '{}|Referer={}'.format(m3u8_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
-        except:
-            pass
+            if cid:
+                # NEW PATTERN: server_lookup
+                lookup_m = re.search(r'["\'](https?://[^"\'\s]+/server_lookup[^"\'\s]*)["\']', html)
+                if lookup_m:
+                    base_lookup = lookup_m.group(1).split('?')[0]
+                    lookup_url = base_lookup + '?channel_id=' + cid
+                    log('Fetching viewembed server via: ' + lookup_url)
+                    _, lookup_text = _get(lookup_url, referer=final_url)
+                    
+                    try:
+                        sk = json.loads(lookup_text).get('server_key')
+                        if sk:
+                            # Search for proxy URL template
+                            # e.g. https://domain/proxy/${sk}/${CHANNEL_KEY}/mono.css
+                            proxy_m = re.search(r'["\'](https?://[^"\'\s]+/proxy/[^"\'\s]+)["\']', html)
+                            if proxy_m:
+                                res_url = proxy_m.group(1).replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
+                                # Simple replacement for other possible JS templates
+                                res_url = res_url.replace('`', '').replace('${sk}', sk)
+                                log('m3u8 found via viewembed server_lookup: ' + res_url)
+                                return '{}|Referer={}'.format(res_url, urllib.parse.quote(final_url))
+                    except:
+                        pass
+
+                # OLD PATTERN: get_stream
+                if token:
+                    api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
+                    log('Fetching viewembed stream from old API: ' + api)
+                    _, api_text = _get(api, referer=final_url)
+                    m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
+                    if m3u8_m:
+                        return '{}|Referer={}'.format(m3u8_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
+        except Exception as e:
+            log('viewembed extraction error: ' + str(e), 'debug')
 
     # Step 3: Follow all non-ad iframes
     iframes = _find_player_iframes(html, final_url)
