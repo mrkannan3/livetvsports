@@ -226,7 +226,6 @@ def _resolve_recursive(url, referer=None, depth=0):
         fid = fid_m.group(1)
         log('Detected wikisport/stellarthread pattern with fid: ' + fid)
         wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid
-        # Avoid recursion if we are already on the wiki page and it says "disabled" or similar
         if wiki_url != url:
             res = _resolve_recursive(wiki_url, referer=final_url, depth=depth+1)
             if res: return res
@@ -235,20 +234,19 @@ def _resolve_recursive(url, referer=None, depth=0):
     if 'viewembed.ru' in final_url or re.search(r'_dec_[a-f0-9]{8}', html):
         try:
             arrays = {}
-            for m in re.finditer(r'(_init_[a-f0-9]{8})\s*=\s*(\[[^\]]+\])', html):
+            for m in re.finditer(r'(_init_[a-f0-9]{8,})\s*=\s*(\[[^\]]+\])', html):
                 arrays[m.group(1)] = json.loads(m.group(2))
             
             resolved_params = {}
-            for m in re.finditer(r'_dec_[a-f0-9]{8}\((_init_[a-f0-9]{8}),\s*(\d+)\)', html):
-                array_name = m.group(1)
-                key = int(m.group(2))
+            for m in re.finditer(r'(_dec_[a-f0-9]{8}|\w+)\((_init_[a-f0-9]{8,}),\s*(\d+)\)', html):
+                array_name = m.group(2)
+                key = int(m.group(3))
                 if array_name in arrays:
                     decoded = _xor_dec(arrays[array_name], key)
-                    if decoded:
-                        resolved_params[array_name] = decoded
+                    if decoded: resolved_params[array_name] = decoded
             
             token = next((v for v in resolved_params.values() if len(v) > 40), "")
-            cid = next((v for v in resolved_params.values() if 5 < len(v) < 20 and not v.startswith('http')), "")
+            cid = next((v for v in resolved_params.values() if 5 < len(v) < 25 and not v.startswith('http')), "")
             
             if cid:
                 # NEW PATTERN: server_lookup
@@ -257,16 +255,28 @@ def _resolve_recursive(url, referer=None, depth=0):
                     base_lookup = lookup_m.group(1).split('?')[0]
                     lookup_url = base_lookup + '?channel_id=' + cid
                     log('Fetching viewembed server via: ' + lookup_url)
-                    _, lookup_text = _get(lookup_url, referer=final_url, timeout=5)
+                    _, lookup_text = _get(lookup_url, referer=final_url, timeout=10)
                     try:
-                        sk = json.loads(lookup_text).get('server_key')
+                        data = json.loads(lookup_text)
+                        sk = data.get('server_key')
                         if sk:
-                            # Re-refined proxy regex to support backticks explicitly
-                            proxy_m = re.search(r'[`"\'\s](https?://[^`"\'\s]+/proxy/[^`"\'\s]+)[`"\'\s]', html)
-                            if proxy_m:
-                                res_url = proxy_m.group(1).replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
+                            log('Viewembed server_key: ' + sk)
+                            # Look for all proxy templates and pick the one with ${sk} or that matches sk logic
+                            proxy_templates = re.findall(r'[`"\'\s](https?://[^`"\'\s]+/proxy/[^`"\'\s]+)[`"\'\s]', html)
+                            res_url = None
+                            for tmpl in proxy_templates:
+                                if '${sk}' in tmpl:
+                                    res_url = tmpl.replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
+                                    break
+                            
+                            # Fallback if no ${sk} found but we have a proxy template
+                            if not res_url and proxy_templates:
+                                # Often the second one is the generic one
+                                res_url = proxy_templates[-1].replace('${CHANNEL_KEY}', cid)
+                                
+                            if res_url:
                                 res_url = res_url.replace('`', '').replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
-                                log('m3u8 found via viewembed server_lookup: ' + res_url)
+                                log('m3u8 resolved via viewembed server_lookup template: ' + res_url)
                                 return '{}|Referer={}'.format(res_url, urllib.parse.quote(final_url))
                     except: pass
 
@@ -274,7 +284,7 @@ def _resolve_recursive(url, referer=None, depth=0):
                 if token:
                     api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
                     log('Fetching viewembed stream from old API: ' + api)
-                    _, api_text = _get(api, referer=final_url, timeout=5)
+                    _, api_text = _get(api, referer=final_url, timeout=10)
                     m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
                     if m3u8_m:
                         return '{}|Referer={}'.format(m3u8_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))

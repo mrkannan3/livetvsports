@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Channel Player - Topembed</title>
+    <!--#include virtual="/ads-fragment?mzone=7661805" --></head>
+<body>
+<style>
+#UnMutePlayer{position:fixed;top:20px;left:20px;z-index:9999;padding:14px 28px;
+  background:linear-gradient(135deg, #ff8c42dd 0%, #ff8c4299 100%);
+  color:#fff;border:2px solid #ff8c42;border-radius:12px;font-size:17px;font-weight:700;
+  cursor:pointer;backdrop-filter:blur(10px);
+  box-shadow:0 8px 32px rgba(0,0,0,0.6),0 0 0 1px rgba(255,255,255,0.1) inset;
+  transition:all 0.3s cubic-bezier(0.4,0,0.2,1);font-family:'Segoe UI',sans-serif;
+  letter-spacing:0.3px;display:block}
+#UnMutePlayer:hover{background:linear-gradient(135deg, #ff8c42 0%, #ff8c42ee 100%);
+  transform:scale(1.05);box-shadow:0 12px 48px rgba(0,0,0,0.7),0 0 40px #ff8c4288}
+#UnMutePlayer:active{transform:scale(0.96)}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.88}}
+#UnMutePlayer{animation:pulse 2s infinite}
+</style>
+<button id="UnMutePlayer" onclick="WSUnmute()">🔊 Click to Unmute</button>
+
+<style>
+#player-container{position:fixed;top:0;left:0;width:100vw;height:100vh;
+  background:linear-gradient(135deg,#0d0d0d,#3a3a3a);
+  display:flex;justify-content:center;align-items:center;overflow:hidden}
+#loader{text-align:center;color:#fff;font-family:'Segoe UI',sans-serif}
+#loader .spinner{width:80px;height:80px;border:10px solid rgba(255,255,255,.3);
+  border-top:10px solid #fff;border-radius:50%;animation:spin 1s linear infinite;margin:0 auto}
+@keyframes spin{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
+#loader .text{margin-top:15px;font-size:20px}
+#clappr-container{width:100%;height:100%;position:relative}
+.cp-media-control .cp-icon,
+.cp-media-control .cp-icon *{color:#fff!important;fill:#fff!important;}
+</style>
+
+<div id="player-container">
+  <div id="loader">
+    <div class="spinner"></div>
+    <div class="text">Loading...</div>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/clappr@latest/dist/clappr.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@clappr/hlsjs-playback@1.9.4/dist/hlsjs-playback.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.2.0/crypto-js.min.js" integrity="sha512-a+SUDuwNzXDvz4XrIcXHuCf089/iJAoN4lmrXJg18XnduKK6YlDHNRalv4yd1N40OKI80tFidF+rqTFKGPoWFQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+
+<!-- Load static resources (translations, utilities) -->
+<script src="/static.js?zdsfzdg=fg"></script>
+<!-- <script src="https://files.catbox.moe/50d58a.js"></script> -->
+<!-- Load obfuscated authentication module -->
+<script src="/obfuscated.js??ddqwqbdebnds"></script>
+<!-- <script src="https://files.catbox.moe/va926w.js"></script> -->
+
+<script>
+(function(){
+'use strict';
+const $ = s => document.querySelector(s);
+
+
+// Check if EPlayerAuth loaded
+if (typeof EPlayerAuth === 'undefined') {
+  console.error('CRITICAL: EPlayerAuth not loaded! /obfuscated.js failed to load or execute.');
+  document.body.innerHTML = '<div style="color:#fff;text-align:center;padding:50px;font-size:24px;background:#000;">ERROR: Authentication module failed to load<br><br>Please check /obfuscated.js exists and is valid JavaScript</div>';
+  throw new Error('EPlayerAuth not defined');
+}
+
+// Polymorphic decryption function (changes every page load)
+const _dec_f9702057 = (d, k) => {
+  let r = '';
+  for (let i = 0; i < d.length; i++) {
+    r += String.fromCharCode(d[i] ^ k);
+  }
+  return r;
+};
+
+// Encrypted parameters (XOR with random keys)
+const _init_0655bd28 = [207,205,214,210,222,204,207,208,205,203,212,211,202,221,141,195,195,142,136,136,141,140,140,139,143,141,140,195,142,136,136,141,139,141,143,139,141,140,195,218,219,222,217,140,139,219,221,220,140,141,219,134,143,140,219,219,142,137,137,138,139,222,140,218,217,218,220,219,217,140,219,217,143,139,220,221,139,134,220,136,138,137,134,220,217,137,218,143,135,217,135,137,137,219,217,139,142,140,219,217,221,219,138];
+const _init_ecf4007c = [110,108,119,115,127,109,110,113,108,106,117,114,107,124,44];
+const _init_eacb2da2 = [];
+const _init_a66ed49a = [140,147,159,141,159,151,152,159,158,212,136,143];
+const _init_7646696c = [163,246,241,162,160,245,161,245,169,244,168,160,246,161,244,160,246,167,167,160,165,244,169,163,163,243,165,245,160,246,245,242,246,245,162,245,241,165,242,243,165,160,241,165,161,162,166,242,166,160,167,245,243,167,162,243,161,245,245,163,246,166,160,160];
+
+// Initialize authentication system with decrypted parameters
+EPlayerAuth.init({
+    authToken: _dec_f9702057(_init_0655bd28, 191),
+    channelKey: _dec_f9702057(_init_ecf4007c, 30),
+    country: _dec_f9702057(_init_eacb2da2, 226),
+    timestamp: 1772334023,
+    validDomain: _dec_f9702057(_init_a66ed49a, 250),
+    channelSalt: _dec_f9702057(_init_7646696c, 144)
+});
+
+function showPlayerContainer(){
+  const o = $('#player-container');
+  if (!$('#clappr-container')){
+    const d = document.createElement('div');
+    d.id = 'clappr-container';
+    d.style.cssText = 'width:100%;height:100%;position:relative;display:none;';
+    o.appendChild(d);
+  }
+}
+
+function hideLoaderShowPlayer(){
+  const l = $('#loader');
+  const c = $('#clappr-container');
+  if (l) l.style.display = 'none';
+  if (c) c.style.display = 'block';
+}
+
+function createPlayerContainer(){
+  const o = $('#player-container');
+  if (!$('#clappr-container')){
+    const d = document.createElement('div');
+    d.id = 'clappr-container';
+    d.style.cssText = 'width:100%;height:100%;position:relative';
+    o.appendChild(d);
+  }
+}
+
+function fetchWithRetry(url, retries, delay, init){
+  return new Promise((resolve, reject)=>{
+    const timeoutMs = 8000; // 8 second timeout per attempt
+    const attempt=()=>{
+      const fetchOpts = {...init, keepalive: true};
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+      
+      fetch(url, {...fetchOpts, signal: controller.signal})
+        .then(r => { 
+          clearTimeout(timeoutId);
+          if (!r.ok) throw new Error('HTTP '+r.status); 
+          return r.json(); 
+        })
+        .then(data => {
+          clearTimeout(timeoutId);
+          resolve(data);
+        })
+        .catch(err => {
+          clearTimeout(timeoutId);
+          const errMsg = err.name === 'AbortError' ? 'Timeout' : (err.message || 'Network error');
+          console.warn(`Fetch attempt failed: ${errMsg}, retries left: ${retries}`);
+          if (retries--) {
+            setTimeout(attempt, delay);
+          } else {
+            reject(new Error(errMsg));
+          }
+        });
+    };
+    attempt();
+  });
+}
+
+let player;
+let reloadTimer = null;
+
+function safeReloadPlayer(){
+  if (reloadTimer) return;
+  console.warn("Playback stalled or errored. Reloading source in 3 seconds...");
+  reloadTimer = setTimeout(()=>{
+    try{
+      if (player){
+        player.stop();
+        player.load(player.options.source && String(player.options.source).trim());
+        player.play();
+        player.unmute();
+        player.setVolume(100);
+      }
+    }catch(_){}
+    reloadTimer = null;
+  }, 3000);
+}
+
+function updateLoader(text) {
+  const loaderText = $('#loader .text');
+  if (loaderText) {
+    loaderText.textContent = text;
+    loaderText.style.fontSize = '18px';
+    loaderText.style.fontWeight = 'bold';
+  }
+  console.log('[LOADER STEP]', text);
+  console.warn('Current step:', text); // Make it more visible in console
+}
+
+function waitForDependencies() {
+  updateLoader('Step 1/4: Loading dependencies (Clappr, HLS)...');
+  return new Promise((resolve, reject) => {
+    let attempts = 0;
+    const maxAttempts = 100; // 10 seconds timeout
+    const checkDeps = () => {
+      attempts++;
+      if (typeof Clappr !== 'undefined' && typeof HlsjsPlayback !== 'undefined') {
+        console.log('✓ Dependencies loaded successfully');
+        resolve();
+      } else if (attempts >= maxAttempts) {
+        const missing = [];
+        if (typeof Clappr === 'undefined') missing.push('Clappr');
+        if (typeof HlsjsPlayback === 'undefined') missing.push('HlsjsPlayback');
+        reject(new Error('Dependency timeout: ' + missing.join(', ') + ' failed to load'));
+      } else {
+        setTimeout(checkDeps, 50);
+      }
+    };
+    checkDeps();
+  });
+}
+
+// Add overall timeout wrapper to prevent infinite loading
+const overallTimeout = new Promise((_, reject) => 
+  setTimeout(() => reject(new Error('Overall initialization timeout (20s)')), 20000)
+);
+
+Promise.race([
+  waitForDependencies().then(() => {
+    console.log('✓ Step 1/4 complete: Dependencies loaded');
+    updateLoader('Step 2/4: Fetching server configuration...');
+    return fetchWithRetry('https://chevy.vovlacosa.sbs/server_lookup?channel_id='+encodeURIComponent(CHANNEL_KEY), 5, 500);
+  }),
+  overallTimeout
+])
+  .then(data => {
+    console.log('✓ Step 2/4 complete: Server lookup successful:', data);
+    updateLoader('Step 3/4: Configuring player...');
+    const sk = data.server_key;
+
+    const m3u8 = (sk === 'top1/cdn')
+      // ? `https://top1.soyspace.cyou/top1/cdn/${CHANNEL_KEY}/mono.csv`
+      // : `https://${sk}new.soyspace.cyou/${sk}/${CHANNEL_KEY}/mono.csv`;
+      ? `https://chevy.adsfadfds.cfd/proxy/top1/cdn/${CHANNEL_KEY}/mono.css`
+      : `https://chevy.adsfadfds.cfd/proxy/${sk}/${CHANNEL_KEY}/mono.css`;
+
+      // ? `https://arbitrageai.cc/proxy/top1/cdn/${CHANNEL_KEY}/mono.css`
+      // : `https://arbitrageai.cc/proxy/${sk}/${CHANNEL_KEY}/mono.css`;
+
+    console.log('✓ M3U8 URL:', m3u8);
+    updateLoader('Step 4/4: Starting player...');
+    showPlayerContainer(); // Create container but keep loader visible
+
+    // Hide loader and show player when ready
+    let playerShown = false;
+    const showPlayerNow = () => {
+      if (playerShown) return;
+      playerShown = true;
+      hideLoaderShowPlayer();
+      console.log('✓ Player now visible');
+    };
+
+    // iOS: Force show after 2s (segments loading = player working)
+    const forceShowTimeout = setTimeout(() => {
+      console.warn('⚠ Force showing player after 2s timeout (iOS/mobile optimization)');
+      showPlayerNow();
+    }, 2000);
+
+    // Balanced playback detection (every 250ms - gentle on CPU)
+    const playingCheckInterval = setInterval(() => {
+      try {
+        const video = document.querySelector('video');
+        if (video) {
+          // Show if: video element exists + (any readyState OR any buffered data OR playing)
+          const hasData = video.readyState >= 1 || video.buffered.length > 0;
+          const isPlaying = video.currentTime > 0 || !video.paused;
+          
+          if (hasData || isPlaying) {
+            console.log('✓ Video detected ready (readyState:', video.readyState, 'buffered:', video.buffered.length, 'playing:', isPlaying, ')');
+            clearInterval(playingCheckInterval);
+            clearTimeout(forceShowTimeout);
+            showPlayerNow();
+          }
+        }
+      } catch(e) {}
+    }, 250);
+
+
+    player = new Clappr.Player({
+      source: m3u8,
+      mimeType: "application/vnd.apple.mpegurl",
+
+      parentId: '#clappr-container',
+      autoPlay: true,
+      mute: true,
+      height: '100%',
+      width:  '100%',
+      disableErrorScreen: true,
+      plugins: [HlsjsPlayback],
+
+      mediacontrol:{
+        seekbar:"#ff8c42",
+        buttons:"#ff8c42"
+      },
+
+      hlsjsConfig:{
+        enableWorker: true,
+        xhrSetup: EPlayerAuth.getXhrSetup(),
+        
+        // CRITICAL: Limit retries so manifest gets refreshed when worker URLs change
+        fragLoadingMaxRetry: 1,  // Try 2 times then refetch manifest for new worker URL
+        fragLoadingRetryDelay: 700,
+        
+        // Keep manifest/level retries high for worker rotation
+        manifestLoadingMaxRetry: Infinity,
+        manifestLoadingRetryDelay: 1000,
+        manifestLoadingMaxRetryTimeout: 64000000,
+        levelLoadingMaxRetry: Infinity,
+        levelLoadingRetryDelay: 1000,
+        levelLoadingMaxRetryTimeout: 64000000,
+        
+        // Live stream optimizations
+        liveSyncDurationCount: 4,      // Stay 4 segments back (was 3) - more cushion
+        liveMaxLatencyDurationCount: 10,  // Max 10 segments behind before catch-up
+        liveDurationInfinity: true,  // Proper live stream handling
+        
+        // Buffer size limits - prevent QuotaExceededError on SourceBuffer
+        maxBufferLength: 60,           // More forward buffer headroom (was 30)
+        maxMaxBufferLength: 120,       // Hard cap on forward buffer growth
+        maxBufferSize: 30 * 1000 * 1000, // 30MB max buffer size
+        backBufferLength: 10,          // Keep only 10s behind playhead
+        
+        // Buffer stall watchdog tuning - CDN is fast, avoid false stall alarms
+        // Default lowBufferWatchdogPeriod is 0.5s - fires on tiny dips between segments
+        lowBufferWatchdogPeriod: 2,    // Poll every 2s instead of 0.5s
+        highBufferWatchdogPeriod: 5,   // Check high buffer every 5s (default 4)
+        nudgeOffset: 0.3,              // Nudge 0.3s past stall point (default 0.1 - too small)
+        nudgeMaxRetry: 6,              // More nudge attempts before giving up (default 3)
+        maxStarvationDelay: 4,         // Max seconds to wait when buffer runs dry
+      },
+
+      playback:{
+        hlsjsConfig:{
+          xhrSetup: EPlayerAuth.getXhrSetup()
+        }
+      }
+    });
+
+    console.log('✓ Step 4/4 complete: Player created');
+
+    // Add HLS.js error recovery for worker rotation
+    let consecutiveFragErrors = 0;
+    const MAX_FRAG_ERRORS_BEFORE_RELOAD = 3;
+    
+    // Track buffer stalls to avoid over-reacting to brief live-segment gaps
+    let bufferStallCount = 0;
+    let lastStallNudge = 0;
+
+    player.on(Clappr.Events.PLAYER_ERROR, function(error) {
+      console.warn('Player error detected:', error);
+
+      // --- Buffer stall: CDN is fast, stall is just a brief inter-segment gap ---
+      if (error && error.type === 'mediaError' && error.details === 'bufferStalledError') {
+        const now = Date.now();
+        bufferStallCount++;
+        console.warn(`Buffer stall #${bufferStallCount} (non-fatal, nudging video)`); 
+
+        // Debounce nudges: don't nudge more than once per 1.5s
+        if (now - lastStallNudge > 1500) {
+          lastStallNudge = now;
+          try {
+            const video = document.querySelector('video');
+            if (video && !video.paused) {
+              // Nudge currentTime forward to escape the stall point
+              video.currentTime += 0.3;
+            }
+          } catch(e) {}
+        }
+
+        // After 5 consecutive stalls, let HLS.js do a full media error recovery
+        if (bufferStallCount >= 5) {
+          console.warn('5 consecutive buffer stalls - triggering HLS media recovery');
+          bufferStallCount = 0;
+          try {
+            const hlsjs = player.core.activePlayback._hls;
+            if (hlsjs && hlsjs.recoverMediaError) {
+              hlsjs.recoverMediaError();
+            }
+          } catch(e) {}
+        }
+        return; // Don't reset consecutiveFragErrors or do anything else
+      }
+
+      // Reset stall counter on any successful non-stall event (handled elsewhere)
+      bufferStallCount = 0;
+
+      // --- Fragment load errors: worker URL rotation ---
+      if (error && error.type === 'networkError' && error.details === 'fragLoadError') {
+        consecutiveFragErrors++;
+        console.warn(`Fragment error ${consecutiveFragErrors}/${MAX_FRAG_ERRORS_BEFORE_RELOAD}`);
+        
+        if (consecutiveFragErrors >= MAX_FRAG_ERRORS_BEFORE_RELOAD) {
+          console.log('Multiple fragment errors - forcing manifest reload for worker rotation');
+          consecutiveFragErrors = 0;
+          
+          // Force HLS.js to reload the manifest (gets new worker URLs)
+          try {
+            const hlsjs = player.core.activePlayback._hls;
+            if (hlsjs && hlsjs.loadSource) {
+              hlsjs.loadSource(m3u8);
+              hlsjs.startLoad();
+            }
+          } catch(e) {
+            console.error('Failed to reload manifest:', e);
+          }
+        }
+      } else {
+        // Reset counter on non-fragment errors
+        consecutiveFragErrors = 0;
+      }
+    });
+    
+    // Preventive M3U8 refresh every 30 minutes (source is stable CDN - no aggressive rotation needed)
+    // NOTE: loadSource() resets HLS.js buffer entirely - always follow with startLoad()
+    setInterval(() => {
+      try {
+        const hlsjs = player.core.activePlayback._hls;
+        if (hlsjs && hlsjs.loadSource) {
+          console.log('Preventive manifest refresh (worker rotation sync)');
+          hlsjs.loadSource(m3u8);
+          hlsjs.startLoad();
+        }
+      } catch(e) {}
+    }, 1800000);  // 30 minutes
+
+    // Listen to Clappr events (but don't rely on them for iOS)
+    player.on(Clappr.Events.PLAYER_READY, function() {
+      console.log('✓ PLAYER_READY event fired');
+      clearTimeout(forceShowTimeout);
+      clearInterval(playingCheckInterval);
+      showPlayerNow();
+    });
+
+    // Also try PLAY event (more reliable on mobile)
+    player.on(Clappr.Events.PLAYER_PLAY, function() {
+      console.log('✓ PLAYER_PLAY event fired');
+      clearTimeout(forceShowTimeout);
+      clearInterval(playingCheckInterval);
+      showPlayerNow();
+    });
+
+    // And PLAYING event (HLS.js specific)
+    player.on(Clappr.Events.PLAYER_PLAYING, function() {
+      console.log('✓ PLAYER_PLAYING event fired');
+      clearTimeout(forceShowTimeout);
+      clearInterval(playingCheckInterval);
+      showPlayerNow();
+      
+      // Reset error counter on successful playback
+      consecutiveFragErrors = 0;
+    });
+
+  })
+  .catch(err=>{
+    console.error('❌ PLAYER INITIALIZATION FAILED:', err);
+    console.error('Full error details:', err.stack || err);
+    
+    // Extract detailed error information
+    const httpStatus = err.message.match(/HTTP (\d+)/);
+    const statusCode = httpStatus ? httpStatus[1] : 'Unknown';
+    
+    // Determine which step failed
+    let errorStep = 'Unknown';
+    if (err.message.includes('Dependency timeout')) {
+      errorStep = 'Step 1/4: Loading Dependencies';
+    } else if (err.message.includes('Auth')) {
+      errorStep = 'Step 2/4: Authentication';
+    } else if (err.message.includes('Server lookup')) {
+      errorStep = 'Step 2/4: Server Lookup';
+    } else if (err.message.includes('timeout')) {
+      errorStep = 'Overall Timeout (45s exceeded)';
+    } else {
+      errorStep = 'Step 3-4/4: Player Initialization';
+    }
+    
+    // Build detailed debug info
+    let debugInfo = `<div style="font-size:11px;color:#888;margin-top:15px;text-align:left;max-width:500px;margin-left:auto;margin-right:auto;font-family:monospace;">`;
+    debugInfo += `<div style="margin-bottom:5px;"><strong>Status:</strong> ${statusCode}</div>`;
+    debugInfo += `<div style="margin-bottom:5px;"><strong>Error:</strong> ${err.message}</div>`;
+    debugInfo += `<div style="margin-bottom:5px;"><strong>Channel:</strong> ${CHANNEL_KEY || 'N/A'}</div>`;
+    debugInfo += `<div style="margin-bottom:5px;"><strong>Token:</strong> ${window.SESSION_TOKEN ? window.SESSION_TOKEN.substring(0, 30) + '...' : 'Missing'}</div>`;
+    debugInfo += `<div style="margin-bottom:5px;"><strong>UA:</strong> ${navigator.userAgent.substring(0, 60)}...</div>`;
+    debugInfo += `<div style="margin-bottom:5px;"><strong>Time:</strong> ${new Date().toISOString()}</div>`;
+    debugInfo += `</div>`;
+    
+    // Specific advice based on error type
+    let errorAdvice = '';
+    try {
+      if (statusCode === '400') {
+        errorAdvice = `<div style="font-size:13px;color:#ffd59e;margin-bottom:15px;">⚠️ Bad Request - This usually means:<br>• Invalid or expired authentication token<br>• Missing required headers<br>• Malformed request data</div>`;
+      } else if (statusCode === '403') {
+        errorAdvice = `<div style="font-size:13px;color:#ffd59e;margin-bottom:15px;">🔒 Access Denied - Possible causes:<br>• Token doesn't match this channel<br>• Country/IP restrictions<br>• Rate limit exceeded</div>`;
+      } else if (statusCode === '500' || statusCode === '502' || statusCode === '503') {
+        errorAdvice = `<div style="font-size:13px;color:#ffd59e;margin-bottom:15px;">${t('vpn_advice')}</div>`;
+      } else if (statusCode === 'Unknown') {
+        errorAdvice = `<div style="font-size:13px;color:#ffd59e;margin-bottom:15px;">🌐 Network Error - Check your connection</div>`;
+      }
+    } catch (e) { }
+
+    const container = $('#player-container');
+    if (container) {
+      container.innerHTML = `
+        <div style="color:#fff;text-align:center;padding:20px;font-family:'Segoe UI',sans-serif;max-height:100vh;overflow-y:auto;">
+          <div style="font-size:24px;margin-bottom:10px">${t('error_title')}</div>
+          <div style="font-size:16px;margin-bottom:15px">${t('failed_at')} <strong>${errorStep}</strong></div>
+          <div style="font-size:18px;color:#ff6b6b;margin-bottom:20px;">HTTP ${statusCode}</div>
+      ` + errorAdvice + debugInfo + `
+          <button onclick="location.reload()" style="background:#E0CDA9;border:none;padding:12px 24px;font-size:16px;cursor:pointer;border-radius:4px;margin-top:10px;">${t('retry')}</button>
+        </div>
+      `;
+    }
+  });
+
+document.cookie = "access=true";
+
+window.WSUnmute = () => {
+  const b = document.getElementById('UnMutePlayer');
+  if (b) b.style.display = 'none';
+  if (player) player.setVolume(100);
+};
+
+})();
+</script>
+
+<script>
+(function(){
+  'use strict';
+
+  const var_d25d323357      = "";
+  const var_e3dbbb2952 = "tudnusa";
+  const var_3d5454b2e0    = "";
+  const var_b5d96da988  = "1772333825";
+  const var_5bcb733e95     = "1772420225";
+
+  const _6a5ca7a9 = [35,60,48,34,48,56,55,48,49,123,39,32];
+  const _d27e3462 = "ee7939afcb6c6c79";
+  const _cadac773 = Date.now();
+  let   _a8bfdcd7 = null;
+  const _4adc3106 = Math.random() > 0.5 ? "allowed" : "blocked";
+  const _9b130bc3 = [0,1,2,3,4].map(x => x * Math.random());
+
+  const _5ed3da0a = (875) => {
+    let r = '', k = 85;
+    for (let i = 0; i < _6a5ca7a9.length; i++) {
+      let c = _6a5ca7a9[i] ^ k;
+      if (i % 2 === 1) c = c ^ 0;
+      r += String.fromCharCode(c);
+    }
+    if (r.indexOf('.') === -1 && r.indexOf(':') === -1) return r;
+    return r || null;
+  };
+
+  const _b2223070 = () => {
+    document.body.innerHTML = '';
+    document.head.innerHTML = '';
+    window.location.href = 'about:blank';
+    throw new Error(Math.random().toString(36));
+  };
+
+  const _43cb2670 = (() => {
+    if (Date.now() - _cadac773 > 5000) return false;
+    const expected = _5ed3da0a(875);
+    if (!expected) return false;
+    let actual = '';
+    try {
+      actual = location.hostname;
+      if (actual !== window.location.hostname) return false;
+      if (actual !== document.location.hostname) return false;
+    } catch(e) { return false; }
+    const paths = [
+      () => actual === expected,
+      () => actual.endsWith('.' + expected),
+      () => { const p = actual.split('.'), e = expected.split('.'); if (p.length < e.length) return false; for (let i = 0; i < e.length; i++) { if (p[p.length - e.length + i] !== e[i]) return false; } return true; }
+    ];
+    const pathIndex = 2;
+    let valid = paths[pathIndex]();
+    if (typeof _6a5ca7a9 !== 'object' || typeof _5ed3da0a !== 'function' || _6a5ca7a9.length === 0) return false;
+    if (!valid) return false;
+    if (_4adc3106 === "blocked" && Math.random() > 0.9999) valid = _9b130bc3[0] > 0.5;
+    return valid;
+  })();
+
+  if (!_43cb2670) { _b2223070(); }
+
+  _a8bfdcd7 = setInterval(() => {
+    const recheck = _5ed3da0a(875);
+    if (!recheck || (location.hostname !== recheck && !location.hostname.endsWith('.' + recheck))) {
+      clearInterval(_a8bfdcd7);
+      _b2223070();
+    }
+  }, 2560);
+
+  let isSandboxed = false;
+  function detectSandbox() {
+    try {
+      if (window.self !== window.top) {
+        let canAccessParent = false;
+        try { void window.top.location.href; canAccessParent = true; } catch(e) {}
+        try { if (!canAccessParent && (!document.domain || document.domain === '')) { isSandboxed = true; return; } } catch(e) { isSandboxed = true; return; }
+      }
+      try { const tb = new Blob(['t'],{type:'text/plain'}); URL.revokeObjectURL(URL.createObjectURL(tb)); } catch(e) { isSandboxed = true; }
+    } catch(err) {}
+  }
+
+  window.addEventListener('load', () => { detectSandbox(); });
+})();
+</script>
+<!-- legacy inline block removed, served from poly cache -->
+</body>
+</html>
+
