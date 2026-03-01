@@ -119,6 +119,10 @@ def _find_m3u8(html, page_url=''):
         m = re.search(pat, html, re.IGNORECASE)
         if m:
             url = _abs(m.group(1).strip("\"'").split('\\')[0], page_url)
+            # DECOY CHECK: wikisport.club often includes a decoy stream in atob()
+            if 'wikisport.club' in page_url and '/hls/stream.m3u8?ch=' in url:
+                log('Skipping wikisport decoy: ' + url, 'debug')
+                continue
             if url:
                 log('Found m3u8: ' + url, 'debug')
                 return url
@@ -138,26 +142,36 @@ def _find_m3u8(html, page_url=''):
             continue
 
     # Heuristic 2: Look for common XOR parameters used in players like viewembed.ru
-    # Search for initialization arrays and associated decoders
     try:
         arrays = {}
         for m in re.finditer(r'(_init_[a-f0-9]{8,}|var\s+\w+)\s*=\s*(\[[0-9,\s]+\])', html):
             name = m.group(1).split()[-1]
             arrays[name] = json.loads(m.group(2))
         
-        # Look for calls to a decoder function with those arrays
-        # Pattern: decoder(array, key)
         for m in re.finditer(r'(\w+)\s*\(\s*(\w+)\s*,\s*(\d+)\s*\)', html):
             array_name = m.group(2)
             key = int(m.group(3))
             if array_name in arrays:
                 decoded = _xor_dec(arrays[array_name], key)
-                if '.m3u8' in decoded or (len(decoded) > 5 and 'id=' not in decoded):
-                    # We found something decoded. If it's not a URL yet, it might be a token/id.
-                    # This logic is handled in the recursive resolver for specific API calls.
-                    pass
-    except:
+                if '.m3u8' in decoded:
+                    url = _abs(decoded, page_url)
+                    log('Found m3u8 in XOR: ' + url, 'debug')
+                    return url
+    except Exception:
         pass
+
+    # Heuristic 4: Look for character array joins like ["h","t","t","p", ...].join("")
+    for join_match in re.finditer(r'\[\s*(["\'][^"\']["\']\s*,\s*)*["\'][^"\']["\']\s*\]\s*\.join\s*\(\s*["\']["\']\s*\)', html):
+        try:
+            array_str = join_match.group(0).split('.join')[0]
+            chars = re.findall(r'["\']([^"\'])["\']', array_str)
+            joined = "".join(chars).replace('\\/', '/')
+            if '.m3u8' in joined:
+                url = _abs(joined, page_url)
+                log('Found m3u8 in character array join: ' + url, 'debug')
+                return url
+        except:
+            continue
 
     return None
 
@@ -191,18 +205,19 @@ def _resolve_recursive(url, referer=None, depth=0):
     if not html:
         return None
 
-    # Step 1: Check for m3u8 in the current page
-    m3u8 = _find_m3u8(html, final_url)
-    if m3u8:
-        # Wrap with Referer for Kodi
-        return '{}|Referer={}'.format(m3u8, urllib.parse.quote(final_url))
+    # Step 1: Check for site-specific dynamic patterns (Helper URLs, APIs) BEFORE generic m3u8
+    # These often contain decoys in the HTML that Step 2 would catch first.
 
-    # Step 2: Check for site-specific dynamic patterns (Helper URLs, APIs)
     # Wikisport pattern
     fid_m = re.search(r'fid\s*=\s*["\']([^"\']+)["\']', html)
-    if fid_m and 'stellarthread.com' in html:
-        wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid_m.group(1)
-        return _resolve_recursive(wiki_url, referer=final_url, depth=depth+1)
+    if fid_m and ('stellarthread.com' in html or 'wikisport.club' in final_url):
+        fid = fid_m.group(1)
+        log('Detected wikisport/stellarthread pattern with fid: ' + fid)
+        wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid
+        # Avoid recursion if we are already on the wiki page and it says "disabled" or similar
+        if wiki_url != url:
+            res = _resolve_recursive(wiki_url, referer=final_url, depth=depth+1)
+            if res: return res
 
     # Viewembed API pattern
     if 'viewembed.ru' in final_url or re.search(r'_dec_[a-f0-9]{8}', html):
@@ -231,21 +246,16 @@ def _resolve_recursive(url, referer=None, depth=0):
                     lookup_url = base_lookup + '?channel_id=' + cid
                     log('Fetching viewembed server via: ' + lookup_url)
                     _, lookup_text = _get(lookup_url, referer=final_url)
-                    
                     try:
                         sk = json.loads(lookup_text).get('server_key')
                         if sk:
-                            # Search for proxy URL template
-                            # e.g. https://domain/proxy/${sk}/${CHANNEL_KEY}/mono.css
                             proxy_m = re.search(r'["\'](https?://[^"\'\s]+/proxy/[^"\'\s]+)["\']', html)
                             if proxy_m:
                                 res_url = proxy_m.group(1).replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
-                                # Simple replacement for other possible JS templates
-                                res_url = res_url.replace('`', '').replace('${sk}', sk)
+                                res_url = res_url.replace('`', '').replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
                                 log('m3u8 found via viewembed server_lookup: ' + res_url)
                                 return '{}|Referer={}'.format(res_url, urllib.parse.quote(final_url))
-                    except:
-                        pass
+                    except: pass
 
                 # OLD PATTERN: get_stream
                 if token:
@@ -257,6 +267,12 @@ def _resolve_recursive(url, referer=None, depth=0):
                         return '{}|Referer={}'.format(m3u8_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
         except Exception as e:
             log('viewembed extraction error: ' + str(e), 'debug')
+
+    # Step 2: Check for m3u8 in the current page (fallback)
+    m3u8 = _find_m3u8(html, final_url)
+    if m3u8:
+        # Wrap with Referer for Kodi
+        return '{}|Referer={}'.format(m3u8, urllib.parse.quote(final_url))
 
     # Step 3: Follow all non-ad iframes
     iframes = _find_player_iframes(html, final_url)

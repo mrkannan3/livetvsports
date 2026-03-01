@@ -18,16 +18,19 @@ s = requests.Session()
 s.mount('https://', SSLAdapter())
 s.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Referer': 'https://viewembed.ru/'
 })
 
-cid = "primasportklub2"
-api = f'https://chevy.vovlacosa.sbs/server_lookup?channel_id={cid}'
-print(f"Testing API: {api}")
+# The resolved URL from user logs
+m3u8_url = "https://wikisport.club/hls/stream.m3u8?ch=spn"
+referer = "https://wikisport.club/court/t9.php"
+
+print(f"Testing stream: {m3u8_url}")
+headers = {'Referer': referer}
 
 try:
-    r = s.get(api, verify=False, timeout=15)
+    r = s.get(m3u8_url, headers=headers, verify=False, timeout=10)
     print(f"Status: {r.status_code}")
-    print(f"Response: {r.text}")
+    print(f"Content-Type: {r.headers.get('Content-Type')}")
+    print(f"Content (first 100 bytes): {r.content[:100]}")
 except Exception as e:
     print(f"Error: {e}")

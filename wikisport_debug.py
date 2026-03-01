@@ -18,13 +18,17 @@ s = requests.Session()
 s.mount('https://', SSLAdapter())
 s.headers.update({
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-    'Referer': 'https://cdn.livetv873.me/'
+    'Referer': 'https://wikisport.club/'
 })
 
+url = 'https://stellarthread.com/wiki.php?player=desktop&live=t9'
+print(f"Fetching: {url}")
+
 try:
-    r = s.get('https://viewembed.ru/channel/Sportklub2%5BSerbia%5D', verify=False, timeout=15)
-    with open('sportklub_viewembed.html', 'wb') as f:
+    r = s.get(url, verify=False, timeout=15)
+    print(f"Status: {r.status_code}")
+    with open('wiki_js_debug.js', 'wb') as f:
         f.write(r.content)
-    print("Success")
+    print("Saved to wiki_js_debug.js")
 except Exception as e:
     print(f"Error: {e}")
