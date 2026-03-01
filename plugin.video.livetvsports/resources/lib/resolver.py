@@ -100,13 +100,6 @@ def _find_m3u8(html, page_url=''):
     if not html:
         return None
 
-    def check_decoy(url, page_url):
-        if not url: return True
-        # Known decoy patterns
-        if ('wikisport.club' in page_url or 'stellarthread.com' in page_url) and '/hls/stream.m3u8?ch=' in url:
-            log('Skipping site decoy: ' + url, 'debug')
-            return True
-        return False
 
     patterns = [
         # pl.init('//host/path/index.m3u8?token')
@@ -124,13 +117,13 @@ def _find_m3u8(html, page_url=''):
         m = re.search(pat, html, re.IGNORECASE)
         if m:
             url = _abs(m.group(1).strip("\"'").split('\\')[0], page_url)
-            if url and not check_decoy(url, page_url):
+            if url and not _is_decoy(url, page_url):
                 log('Found m3u8 via pattern: ' + url, 'debug')
                 return url
 
     # Heuristic 1: Look for character array joins like ["h","t","t","p", ...].join("")
     # These are usually the real high-protection streams (e.g. stellarthread)
-    for join_match in re.finditer(r'(\[\s*(?:["\'](?:\\.|[^"\'])+?["\']\s*,\s*)*["\'](?:\\.|[^"\'])+?["\']\s*\])\s*\.join\s*\(\s*["\']["\']\s*\)', html):
+    for join_match in re.finditer(r'\(?(\[\s*(?:["\'](?:\\.|[^"\'])+?["\']\s*,\s*)*["\'](?:\\.|[^"\'])+?["\']\s*\])\s*\.join\s*\(\s*["\']["\']\s*\)', html):
         try:
             array_content = join_match.group(1)
             chars = re.findall(r'["\']((?:\\.|[^"\'])+?)["\']', array_content)
@@ -149,7 +142,7 @@ def _find_m3u8(html, page_url=''):
                             log('Found dynamic suffix in element {}: {}'.format(elem_id, content), 'debug')
                             suffix += content
                 url = _abs(joined + suffix, page_url)
-                if url and not check_decoy(url, page_url):
+                if url and not _is_decoy(url, page_url):
                     log('Found m3u8 in character array join (+suffix): ' + url, 'debug')
                     return url
         except: continue
@@ -163,12 +156,12 @@ def _find_m3u8(html, page_url=''):
                 m3u8_url_m = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*|/[^"\'\s]+\.m3u8[^"\'\s]*)', decoded)
                 if m3u8_url_m:
                     url = _abs(m3u8_url_m.group(0), page_url)
-                    if not check_decoy(url, page_url):
+                    if not _is_decoy(url, page_url):
                         log('Found m3u8 in base64 string: ' + url, 'debug')
                         return url
         except: continue
 
-    # Heuristic 3: Look for common XOR parameters used in players like viewembed.ru
+    # Heuristic 3: XOR
     try:
         arrays = {}
         for m in re.finditer(r'(_init_[a-f0-9]{8,}|var\s+\w+)\s*=\s*(\[[0-9,\s]+\])', html):
@@ -181,8 +174,9 @@ def _find_m3u8(html, page_url=''):
                 decoded = _xor_dec(arrays[m.group(2)], key)
                 if '.m3u8' in decoded:
                     url = _abs(decoded, page_url)
-                    log('Found m3u8 in XOR: ' + url, 'debug')
-                    return url
+                    if not _is_decoy(url, page_url):
+                        log('Found m3u8 in XOR: ' + url, 'debug')
+                        return url
     except Exception: pass
 
     return None
@@ -217,98 +211,107 @@ def _resolve_recursive(url, referer=None, depth=0):
     if not html:
         return None
 
-    # Step 1: Check for site-specific dynamic patterns (Helper URLs, APIs) BEFORE generic m3u8
-    # These often contain decoys in the HTML that Step 2 would catch first.
+    # Step 1: Specific high-fidelity scrapers for known complex sites
+    
+    # Wikisport / Stellarthread (Tennis)
+    if 'stellarthread.com' in final_url or 'wikisport.club' in final_url or re.search(r'fid\s*=\s*["\']([^"\']+)["\']', html):
+        fid_m = re.search(r'fid\s*=\s*["\']([^"\']+)["\']', html)
+        if fid_m:
+            fid = fid_m.group(1)
+            wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid
+            if wiki_url != url:
+                log('Recursing to stellarthread player: ' + wiki_url)
+                res = _resolve_recursive(wiki_url, referer=final_url, depth=depth+1)
+                if res: return res
 
-    # Wikisport pattern
-    fid_m = re.search(r'fid\s*=\s*["\']([^"\']+)["\']', html)
-    if fid_m and ('stellarthread.com' in html or 'wikisport.club' in final_url):
-        fid = fid_m.group(1)
-        log('Detected wikisport/stellarthread pattern with fid: ' + fid)
-        wiki_url = 'https://stellarthread.com/wiki.php?player=desktop&live=' + fid
-        if wiki_url != url:
-            res = _resolve_recursive(wiki_url, referer=final_url, depth=depth+1)
-            if res: return res
+        # If on the player page, use the character array join + span reconstruction
+        # Look for the .m3u8 join logic specifically
+        chars_m = re.search(r'(\[\s*(?:["\'](?:\\.|[^"\'])+?["\']\s*,\s*)*["\'](?:\\.|[^"\'])+?["\']\s*\])\s*\.join\s*\(\s*["\']["\']\s*\)', html)
+        if chars_m:
+            try:
+                chars = re.findall(r'["\']((?:\\.|[^"\'])+?)["\']', chars_m.group(1))
+                base = "".join(chars).replace('\\/', '/')
+                if '.m3u8' in base:
+                    # Look for innerHTML appends (the MD5/token)
+                    suffix = ""
+                    for span_m in re.finditer(r'document\.getElementById\(["\'](\w+)["\']\)\.innerHTML', html):
+                        span_id = span_m.group(1)
+                        content_m = re.search(r'id\s*=\s*["\']?' + span_id + r'["\']?[^>]*>([^<]*)', html)
+                        if content_m: suffix += content_m.group(1).strip()
+                    url = base + suffix
+                    if not _is_decoy(url, final_url):
+                        log('Stellarthread stream resolved: ' + url)
+                        return '{}|Referer={}'.format(url, urllib.parse.quote(final_url))
+            except: pass
 
-    # Viewembed API pattern
+    # Viewembed (Volleyball/Cricket)
     if 'viewembed.ru' in final_url or re.search(r'_dec_[a-f0-9]{8}', html):
+        log('Attempting Viewembed specific resolution...')
         try:
+            # XOR Decode Parameters
             arrays = {}
             for m in re.finditer(r'(_init_[a-f0-9]{8,})\s*=\s*(\[[^\]]+\])', html):
                 arrays[m.group(1)] = json.loads(m.group(2))
             
-            resolved_params = {}
+            resolved = {}
             for m in re.finditer(r'(_dec_[a-f0-9]{8}|\w+)\((_init_[a-f0-9]{8,}),\s*(\d+)\)', html):
-                array_name = m.group(2)
-                key = int(m.group(3))
+                array_name, key = m.group(2), int(m.group(3))
                 if array_name in arrays:
-                    decoded = _xor_dec(arrays[array_name], key)
-                    if decoded: resolved_params[array_name] = decoded
+                    val = _xor_dec(arrays[array_name], key)
+                    if val: resolved[array_name] = val
             
-            token = next((v for v in resolved_params.values() if len(v) > 40), "")
-            cid = next((v for v in resolved_params.values() if 5 < len(v) < 25 and not v.startswith('http')), "")
+            cid = next((v for v in resolved.values() if 5 < len(v) < 25 and not v.startswith('http')), "")
             
             if cid:
-                # NEW PATTERN: server_lookup
+                # 1. Try server_lookup (Fastest/Newest)
                 lookup_m = re.search(r'["\'](https?://[^"\'\s]+/server_lookup[^"\'\s]*)["\']', html)
                 if lookup_m:
-                    base_lookup = lookup_m.group(1).split('?')[0]
-                    lookup_url = base_lookup + '?channel_id=' + cid
-                    log('Fetching viewembed server via: ' + lookup_url)
-                    _, lookup_text = _get(lookup_url, referer=final_url, timeout=10)
-                    try:
-                        data = json.loads(lookup_text)
-                        sk = data.get('server_key')
-                        if sk:
-                            log('Viewembed server_key: ' + sk)
-                            # Look for all proxy templates and pick the one with ${sk} or that matches sk logic
-                            proxy_templates = re.findall(r'[`"\'\s](https?://[^`"\'\s]+/proxy/[^`"\'\s]+)[`"\'\s]', html)
-                            res_url = None
-                            for tmpl in proxy_templates:
-                                if '${sk}' in tmpl:
-                                    res_url = tmpl.replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
-                                    break
-                            
-                            # Fallback if no ${sk} found but we have a proxy template
-                            if not res_url and proxy_templates:
-                                # Often the second one is the generic one
-                                res_url = proxy_templates[-1].replace('${CHANNEL_KEY}', cid)
-                                
-                            if res_url:
-                                res_url = res_url.replace('`', '').replace('${sk}', sk).replace('${CHANNEL_KEY}', cid)
-                                log('m3u8 resolved via viewembed server_lookup template: ' + res_url)
+                    l_url = lookup_m.group(1).split('?')[0] + '?channel_id=' + cid
+                    _, l_text = _get(l_url, referer=final_url, timeout=10)
+                    sk = json.loads(l_text).get('server_key')
+                    if sk:
+                        log('Viewembed Server Key: ' + sk)
+                        # Pick the right template (usually uses backticks or sk variable)
+                        templates = re.findall(r'[`"\'\s](https?://[^`"\'\s]+/proxy/[^`"\'\s]+)[`"\'\s]', html)
+                        for tmpl in templates:
+                            if '${sk}' in tmpl or sk in tmpl:
+                                res_url = tmpl.replace('${sk}', sk).replace('${CHANNEL_KEY}', cid).replace('`', '')
+                                log('Resolved via server_lookup: ' + res_url)
                                 return '{}|Referer={}'.format(res_url, urllib.parse.quote(final_url))
-                    except: pass
 
-                # OLD PATTERN: get_stream
+                # 2. Try old get_stream API (Fallback)
+                token = next((v for v in resolved.values() if len(v) > 40), "")
                 if token:
                     api = 'https://viewembed.ru/get_stream?id={}&token={}&t={}'.format(cid, token, int(time.time()))
-                    log('Fetching viewembed stream from old API: ' + api)
                     _, api_text = _get(api, referer=final_url, timeout=10)
-                    m3u8_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
-                    if m3u8_m:
-                        return '{}|Referer={}'.format(m3u8_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
+                    m_m = re.search(r'https?://[^"\'\s]+\.m3u8[^"\'\s]*', api_text)
+                    if m_m:
+                        log('Resolved via old API: ' + m_m.group(0))
+                        return '{}|Referer={}'.format(m_m.group(0).replace('\\/', '/'), urllib.parse.quote(final_url))
         except Exception as e:
-            log('viewembed extraction error: ' + str(e), 'debug')
+            log('Viewembed error: ' + str(e), 'debug')
 
-    # Step 2: Check for m3u8 in the current page (fallback)
+    # Step 2: Generic Heuristics (for other sites)
     m3u8 = _find_m3u8(html, final_url)
     if m3u8:
-        # Wrap with Referer for Kodi
         return '{}|Referer={}'.format(m3u8, urllib.parse.quote(final_url))
 
-    # Step 3: Follow all non-ad iframes
+    # Step 3: Follow Iframes
     iframes = _find_player_iframes(html, final_url)
     for ifr_url in iframes:
-        # Avoid circular iframes
-        if ifr_url == url:
-            continue
+        if ifr_url == url: continue
         res = _resolve_recursive(ifr_url, referer=final_url, depth=depth+1)
-        if res:
-            return res
+        if res: return res
 
     return None
 
+def _is_decoy(url, page_url=''):
+    """Helper to catch fake stream URLs used by protection scripts."""
+    if not url: return True
+    # Wikisport/Stellarthread fake link
+    if ('wikisport.club' in page_url or 'stellarthread.com' in page_url) and '/hls/stream.m3u8?ch=' in url:
+        return True
+    return False
 
 def resolve_stream(player_url, event_id=None):
     """
