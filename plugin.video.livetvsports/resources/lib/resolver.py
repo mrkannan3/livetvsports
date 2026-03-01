@@ -114,34 +114,56 @@ def _find_m3u8(html, page_url=''):
         r'["\']file["\']\s*:\s*["\']([^"\']+\.m3u8[^"\']*)',
         r'src\s*[=:]\s*["\']([^"\']+\.m3u8[^"\']*)',
         r'hls\.loadSource\s*\(\s*["\']([^"\']+)',
+        # atob decoys or real streams
+        r'atob\s*\(\s*["\']([^"\']{16,})["\']\s*\)'
     ]
     for pat in patterns:
         m = re.search(pat, html, re.IGNORECASE)
         if m:
             url = _abs(m.group(1).strip("\"'").split('\\')[0], page_url)
-            # DECOY CHECK: wikisport.club often includes a decoy stream in atob()
-            if 'wikisport.club' in page_url and '/hls/stream.m3u8?ch=' in url:
-                log('Skipping wikisport decoy: ' + url, 'debug')
+            # DECOY CHECK: wikisport.club and stellarthread.com often include a decoy stream in atob()
+            if ('wikisport.club' in page_url or 'stellarthread.com' in page_url) and '/hls/stream.m3u8?ch=' in url:
+                log('Skipping site decoy: ' + url, 'debug')
                 continue
             if url:
                 log('Found m3u8: ' + url, 'debug')
                 return url
 
-    # Heuristic 1: Look for any base64 encoded strings that might contain .m3u8
-    # (Matches what was 'mustave' for wikisport but now generic)
+    # Heuristic 1: Look for character array joins like ["h","t","t","p", ...].join("")
+    # These are usually the real high-protection streams (e.g. stellarthread)
+    for join_match in re.finditer(r'(\[\s*(?:["\'](?:\\.|[^"\'])+?["\']\s*,\s*)*["\'](?:\\.|[^"\'])+?["\']\s*\])\s*\.join\s*\(\s*["\']["\']\s*\)', html):
+        try:
+            array_content = join_match.group(1)
+            chars = re.findall(r'["\']((?:\\.|[^"\'])+?)["\']', array_content)
+            joined = "".join(chars).replace('\\/', '/').replace('\\', '')
+            if '.m3u8' in joined:
+                start_pos = join_match.end()
+                suffix = ""
+                for part_match in re.finditer(r'\s*\+\s*(?:["\']([^"\']*)["\']|\w+\.innerHTML|(\w+)(?!\()|document\.getElementById\(["\'](\w+)["\']\)\.innerHTML)', html[start_pos:start_pos+300]):
+                    if part_match.group(1): suffix += part_match.group(1)
+                    elif part_match.group(3):
+                        elem_m = re.search(r'id\s*=\s*["\']?' + part_match.group(3) + r'["\']?[^>]*>([^<]*)', html)
+                        if elem_m: suffix += elem_m.group(1).strip()
+                url = _abs(joined + suffix, page_url)
+                log('Found m3u8 in character array join (+suffix): ' + url, 'debug')
+                return url
+        except: continue
+
+    # Heuristic 2: Look for any base64 encoded strings that might contain .m3u8
     for b64_match in re.finditer(r'["\']([A-Za-z0-9+/=]{16,})["\']', html):
         try:
             decoded = base64.b64decode(b64_match.group(1)).decode('utf-8', 'ignore')
             if '.m3u8' in decoded:
-                m3u8_url = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*|/[^"\'\s]+\.m3u8[^"\'\s]*)', decoded)
-                if m3u8_m := m3u8_url:
-                    url = _abs(m3u8_m.group(0), page_url)
+                m3u8_url_m = re.search(r'(https?://[^"\'\s]+\.m3u8[^"\'\s]*|/[^"\'\s]+\.m3u8[^"\'\s]*)', decoded)
+                if m3u8_url_m:
+                    url = _abs(m3u8_url_m.group(0), page_url)
+                    if ('wikisport.club' in page_url or 'stellarthread.com' in page_url) and '/hls/stream.m3u8?ch=' in url:
+                        continue
                     log('Found m3u8 in base64 string: ' + url, 'debug')
                     return url
-        except:
-            continue
+        except: continue
 
-    # Heuristic 2: Look for common XOR parameters used in players like viewembed.ru
+    # Heuristic 3: Look for common XOR parameters used in players like viewembed.ru
     try:
         arrays = {}
         for m in re.finditer(r'(_init_[a-f0-9]{8,}|var\s+\w+)\s*=\s*(\[[0-9,\s]+\])', html):
@@ -149,29 +171,14 @@ def _find_m3u8(html, page_url=''):
             arrays[name] = json.loads(m.group(2))
         
         for m in re.finditer(r'(\w+)\s*\(\s*(\w+)\s*,\s*(\d+)\s*\)', html):
-            array_name = m.group(2)
             key = int(m.group(3))
-            if array_name in arrays:
-                decoded = _xor_dec(arrays[array_name], key)
+            if m.group(2) in arrays:
+                decoded = _xor_dec(arrays[m.group(2)], key)
                 if '.m3u8' in decoded:
                     url = _abs(decoded, page_url)
                     log('Found m3u8 in XOR: ' + url, 'debug')
                     return url
-    except Exception:
-        pass
-
-    # Heuristic 4: Look for character array joins like ["h","t","t","p", ...].join("")
-    for join_match in re.finditer(r'\[\s*(["\'][^"\']["\']\s*,\s*)*["\'][^"\']["\']\s*\]\s*\.join\s*\(\s*["\']["\']\s*\)', html):
-        try:
-            array_str = join_match.group(0).split('.join')[0]
-            chars = re.findall(r'["\']([^"\'])["\']', array_str)
-            joined = "".join(chars).replace('\\/', '/')
-            if '.m3u8' in joined:
-                url = _abs(joined, page_url)
-                log('Found m3u8 in character array join: ' + url, 'debug')
-                return url
-        except:
-            continue
+    except Exception: pass
 
     return None
 
